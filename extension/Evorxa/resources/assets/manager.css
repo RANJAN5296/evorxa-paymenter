@@ -1,0 +1,105 @@
+/* Admin > Evorxa Cloud. Uses Filament's colour variables, so it follows the admin theme in light and dark mode. */
+.evxa { display: flex; flex-direction: column; gap: 16px; font-size: 14px; }
+.evxa a { color: var(--primary-600); }
+.dark .evxa a { color: var(--primary-400); }
+.evxa-muted { color: var(--gray-500); font-size: 13px; }
+.dark .evxa-muted { color: var(--gray-400); }
+.evxa-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+.evxa-nowrap { white-space: nowrap; }
+.evxa-ok { color: var(--success-600); }
+.evxa-bad { color: var(--danger-600); }
+.dark .evxa-ok { color: var(--success-400); }
+.dark .evxa-bad { color: var(--danger-400); }
+.evxa-mt { margin-top: 8px; }
+.evxa-h3 { font-size: 14px; font-weight: 600; margin: 18px 0 8px; }
+
+/* Header */
+.evxa-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    padding: 16px 20px; border-radius: 12px; background: #fff; border: 1px solid var(--gray-200);
+    position: relative; overflow: hidden;
+}
+.evxa-head::after { content: ""; position: absolute; inset: auto 0 0 0; height: 3px; background: linear-gradient(90deg, #e2445c, #111827); }
+.dark .evxa-head { background: var(--gray-900); border-color: var(--gray-800); }
+.dark .evxa-head::after { background: linear-gradient(90deg, #e2445c, #f97316); }
+.evxa-brand { display: flex; align-items: center; gap: 12px; }
+.evxa-logo { height: 30px; width: auto; }
+.evxa-logo-dark, .dark .evxa-logo-light { display: none; }
+.dark .evxa-logo-dark { display: block; }
+.evxa-sub { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--gray-500); border-inline-start: 1px solid var(--gray-200); padding-inline-start: 12px; }
+.dark .evxa-sub { border-color: var(--gray-700); }
+.evxa-links { display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--gray-500); }
+
+/* Tabs */
+.evxa-tabs { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px; border-radius: 10px; background: #fff; border: 1px solid var(--gray-200); }
+.dark .evxa-tabs { background: var(--gray-900); border-color: var(--gray-800); }
+.evxa-tab { padding: 7px 14px; border-radius: 7px; font-weight: 600; font-size: 13px; color: var(--gray-600); background: none; border: 0; cursor: pointer; }
+.evxa-tab:hover { background: var(--gray-100); color: var(--gray-900); }
+.evxa-tab.is-active { background: #111827; color: #fff; }
+.dark .evxa-tab { color: var(--gray-300); }
+.dark .evxa-tab:hover { background: var(--gray-800); color: #fff; }
+.dark .evxa-tab.is-active { background: var(--primary-600); color: #fff; }
+
+/* Alerts */
+.evxa-alert { padding: 10px 14px; border-radius: 8px; font-size: 13px; }
+.evxa-alert-bad { background: color-mix(in srgb, var(--danger-500) 12%, transparent); color: var(--danger-700); }
+.dark .evxa-alert-bad { color: var(--danger-300); }
+
+/* Dashboard */
+.evxa-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+.evxa-stat { padding: 16px 18px; border-radius: 12px; background: #fff; border: 1px solid var(--gray-200); }
+.dark .evxa-stat { background: var(--gray-900); border-color: var(--gray-800); }
+.evxa-stat-label { font-size: 12px; color: var(--gray-500); }
+.evxa-stat-value { font-size: 24px; font-weight: 700; margin: 2px 0; }
+.evxa-stat-value small { font-size: 13px; font-weight: 500; color: var(--gray-500); }
+.evxa-stat-sub { font-size: 12px; color: var(--gray-500); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.evxa-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+@media (min-width: 1100px) { .evxa-grid { grid-template-columns: 3fr 2fr; } }
+.evxa-col { display: flex; flex-direction: column; gap: 16px; }
+.evxa-progress { height: 6px; border-radius: 99px; background: var(--gray-200); overflow: hidden; margin-bottom: 8px; }
+.dark .evxa-progress { background: var(--gray-700); }
+.evxa-progress span { display: block; height: 100%; background: linear-gradient(90deg, #e2445c, #f97316); }
+.evxa-checks { list-style: none; margin: 0; padding: 0; }
+.evxa-checks li { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-top: 1px solid var(--gray-100); }
+.dark .evxa-checks li { border-color: var(--gray-800); }
+.evxa-check { flex: none; width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; color: #fff; }
+.evxa-check.is-ok { background: var(--success-500); }
+.evxa-check.is-warn { background: var(--warning-500); }
+.evxa-check-text { flex: 1; min-width: 0; }
+.evxa-money { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 8px; }
+.evxa-money > div { padding: 10px 12px; border-radius: 8px; background: var(--gray-50); display: flex; flex-direction: column; }
+.dark .evxa-money > div { background: var(--gray-800); }
+.evxa-money span { font-size: 12px; color: var(--gray-500); }
+.evxa-money strong { font-size: 17px; }
+.evxa-attn { padding: 8px 0; border-top: 1px solid var(--gray-100); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.dark .evxa-attn { border-color: var(--gray-800); }
+.evxa-attn .evxa-muted { flex-basis: 100%; }
+.evxa-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+
+/* Tables */
+.evxa-table-wrap { overflow-x: auto; }
+.evxa-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.evxa-table th { text-align: start; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--gray-500); padding: 8px 10px; border-bottom: 1px solid var(--gray-200); }
+.evxa-table td { padding: 9px 10px; border-bottom: 1px solid var(--gray-100); vertical-align: top; }
+.dark .evxa-table th { border-color: var(--gray-700); }
+.dark .evxa-table td { border-color: var(--gray-800); }
+.evxa-table .r { text-align: end; }
+.evxa-group td { background: var(--gray-50); font-weight: 600; }
+.dark .evxa-group td { background: var(--gray-800); }
+.evxa-cb { width: 16px; height: 16px; }
+
+/* Forms */
+.evxa-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 18px; margin-bottom: 12px; }
+.evxa-form > label, .evxa-form > div { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 13px; }
+.evxa-form .evxa-muted { font-weight: 400; }
+.evxa-check-row { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 6px 0; }
+.evxa-inline { display: flex; gap: 8px; align-items: center; margin: 4px 0 14px; max-width: 520px; }
+.evxa-inline > :first-child { flex: 1; }
+.evxa-stack { display: flex; flex-direction: column; gap: 16px; }
+
+/* Service detail */
+.evxa-dl { display: grid; grid-template-columns: 1fr; gap: 0; margin: 12px 0; }
+.evxa-dl > div { display: grid; grid-template-columns: 180px 1fr; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--gray-100); }
+.dark .evxa-dl > div { border-color: var(--gray-800); }
+.evxa-dl dt { color: var(--gray-500); font-size: 13px; }
+.evxa-dl dd { margin: 0; }

@@ -1,0 +1,414 @@
+<?php
+
+namespace Paymenter\Extensions\Servers\Evorxa\Services;
+
+use App\Models\Product;
+use App\Models\Server;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Paymenter\Extensions\Servers\Evorxa\Api\ApiException;
+use Paymenter\Extensions\Servers\Evorxa\Api\Client;
+use Paymenter\Extensions\Servers\Evorxa\Support\Cache;
+use Paymenter\Extensions\Servers\Evorxa\Support\Catalog;
+use Paymenter\Extensions\Servers\Evorxa\Support\Repo;
+use Paymenter\Extensions\Servers\Evorxa\Support\Schema;
+use Paymenter\Extensions\Servers\Evorxa\Support\Settings;
+use Paymenter\Extensions\Servers\Evorxa\Support\Util;
+
+/**
+ * Background work, run every minute by Laravel's scheduler under a cache lock:
+ *  - adopt servers whose create call timed out
+ *  - finish provisioning (credentials onto the service, ready email)
+ *  - hourly: sync every linked server and run the renewal keeper, sync plan stock
+ *  - daily: wallet balance check
+ */
+class Watcher
+{
+    const LOCK = 'evorxa_watcher';
+    const BUDGET_SECONDS = 45;
+
+    private static $clients = [];
+
+    public static function tick()
+    {
+        Schema::ensure();
+        if (!Client::defaultServer() || !Cache::lock(self::LOCK, 0)) {
+            return;
+        }
+        $deadline = time() + self::BUDGET_SECONDS;
+        try {
+            self::resolveUnknown($deadline);
+            self::pollProvisioning($deadline);
+            if (time() < $deadline && Cache::acquire('gate:sync', 3300)) {
+                self::syncAll($deadline);
+            }
+            if (time() < $deadline && Cache::acquire('gate:stock', 3300)) {
+                self::syncStock();
+            }
+            if (time() < $deadline && Cache::acquire('gate:balance', 86000)) {
+                self::checkBalance();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Evorxa scheduler error: ' . $e->getMessage());
+        } finally {
+            Cache::unlock(self::LOCK);
+        }
+    }
+
+    /** API client for the server a service's product uses (falls back to the default server). */
+    public static function clientFor($service)
+    {
+        $server = $service && $service->product ? $service->product->server : null;
+        if ($server && $server->extension !== Client::MODULE) {
+            $server = null;
+        }
+        $serverId = $server ? (int) $server->id : 0;
+        if (!isset(self::$clients[$serverId])) {
+            self::$clients[$serverId] = $server ? Client::forServer($server) : Client::forDefaultServer();
+        }
+        return self::$clients[$serverId];
+    }
+
+    // ------------------------------------------------------------------ adoption
+
+    private static function resolveUnknown($deadline)
+    {
+        $stale = date('Y-m-d H:i:s', time() - 300);
+        $rows = DB::table(Schema::SERVICES)
+            ->where(function ($q) use ($stale) {
+                $q->where('state', 'unknown')
+                    ->orWhere(function ($q2) use ($stale) {
+                        $q2->where('state', 'creating')->where('creating_at', '<', $stale);
+                    });
+            })
+            ->limit(10)
+            ->get();
+        foreach ($rows as $row) {
+            if (time() >= $deadline) {
+                return;
+            }
+            try {
+                self::adopt(self::clientFor(Repo::service($row->service_id)), $row, true);
+            } catch (\Throwable $e) {
+                Repo::log($row->service_id, 'adopt', false, $e->getMessage(), null, null, 'cron');
+            }
+        }
+    }
+
+    /**
+     * Find the server a timed-out create may have built (exact name inside the project).
+     * With $giveUp, a create older than 15 minutes with no server is marked failed so it can be retried.
+     */
+    public static function adopt(Client $api, $row, $giveUp)
+    {
+        if (!$row->name || !$row->project_id) {
+            return false;
+        }
+        $list = $api->get('instances', ['project_id' => (int) $row->project_id]);
+        foreach ((array) $list as $inst) {
+            if (!is_array($inst) || (isset($inst['name']) ? $inst['name'] : null) !== $row->name || !empty($inst['deleted_at'])) {
+                continue;
+            }
+            if ((int) (isset($inst['project_id']) ? $inst['project_id'] : 0) !== (int) $row->project_id) {
+                continue;
+            }
+            $other = Repo::findByInstance($inst['id']);
+            if ($other && (int) $other->service_id !== (int) $row->service_id) {
+                continue;
+            }
+            Repo::update($row->service_id, [
+                'state' => 'provisioning',
+                'instance_id' => (string) $inst['id'],
+                'snapshot' => json_encode(Provisioner::snapshotOf($inst)),
+                'last_sync_at' => Repo::now(),
+                'error' => null,
+            ]);
+            Repo::log($row->service_id, 'adopt', true, 'Found the server created by the unconfirmed order', null, (string) $inst['id']);
+            Provisioner::labelService(Repo::service($row->service_id), isset($inst['hostname']) ? $inst['hostname'] : '');
+            return true;
+        }
+        $started = strtotime((string) $row->creating_at);
+        if ($giveUp && $started && time() - $started > 900) {
+            Repo::update($row->service_id, ['state' => 'failed', 'error' => 'Evorxa never created the server; safe to retry Create.']);
+            Repo::log($row->service_id, 'adopt', false, 'No server was created upstream; marked failed (safe to retry Create)');
+            Provisioner::deleteSshKeyWith($api, $row->ssh_key_id);
+            Mailer::alertAdmin(
+                'create-failed-' . $row->service_id,
+                'Server for service #' . $row->service_id . ' was not created',
+                'Evorxa never confirmed or built the server. Retry "Create" on the service (Admin > Services > the service > Change status).'
+            );
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------------------ provisioning
+
+    private static function pollProvisioning($deadline)
+    {
+        $rows = DB::table(Schema::SERVICES)->where('state', 'provisioning')->orderBy('updated_at')->limit(15)->get();
+        foreach ($rows as $row) {
+            if (time() >= $deadline) {
+                return;
+            }
+            try {
+                self::finalize(self::clientFor(Repo::service($row->service_id)), $row);
+            } catch (\Throwable $e) {
+                Repo::log($row->service_id, 'finalize', false, $e->getMessage(), null, $row->instance_id, 'cron');
+            }
+        }
+    }
+
+    /**
+     * Move a provisioning server to active once it has booted (and its app is ready):
+     * store the connection details and send the ready email once.
+     * Returns true when the server is ready.
+     */
+    public static function finalize(Client $api, $row)
+    {
+        $inst = Provisioner::unwrap($api->get('instances/' . rawurlencode($row->instance_id)));
+        if (!Provisioner::fenceOk($row, $inst)) {
+            Repo::log($row->service_id, 'finalize', false, 'Instance is not in the expected project; not touching it', null, $row->instance_id);
+            return false;
+        }
+        Repo::update($row->service_id, ['snapshot' => json_encode(Provisioner::snapshotOf($inst)), 'last_sync_at' => Repo::now()]);
+
+        $status = strtolower(isset($inst['status']) ? (string) $inst['status'] : '');
+        $timedOut = self::timedOut($row);
+
+        if (in_array($status, ['error', 'failed'], true)) {
+            Repo::update($row->service_id, ['state' => 'failed', 'error' => 'Evorxa reported the build as ' . $status]);
+            Repo::log($row->service_id, 'provision', false, 'Evorxa reported the build as ' . $status, null, $row->instance_id);
+            Mailer::alertAdmin('build-failed-' . $row->service_id, 'Server build failed for service #' . $row->service_id, 'Evorxa reported status "' . $status . '" for server ' . $row->instance_id . '.');
+            return false;
+        }
+
+        if (Provisioner::isBuilding($inst)) {
+            self::maybeAlertSlow($row, $timedOut);
+            return false;
+        }
+
+        $app = null;
+        if ($row->app_slug) {
+            try {
+                $res = $api->get('instances/' . rawurlencode($row->instance_id) . '/app');
+                $app = isset($res['app']) && is_array($res['app']) ? $res['app'] : null;
+            } catch (ApiException $e) {
+                $app = null;
+            }
+            if ($app && isset($app['status']) && $app['status'] !== 'ready' && !$timedOut) {
+                return false; // Application still installing.
+            }
+            if (!$app) {
+                $catalogApps = (new Catalog())->apps();
+                $appName = isset($catalogApps[$row->app_slug]['name']) ? $catalogApps[$row->app_slug]['name'] : $row->app_slug;
+                $osNow = isset($inst['os']) ? (string) $inst['os'] : '';
+                // Right after boot the install may not be registered yet: Evorxa still reports the app as the OS.
+                if (!$timedOut && ($osNow === '' || stripos($osNow, $appName) !== false || stripos($osNow, $row->app_slug) !== false)) {
+                    return false;
+                }
+                // The server came up without the application (install failed, or rebuilt elsewhere).
+                Repo::update($row->service_id, ['app_slug' => null, 'os_label' => Util::clean($osNow, 190)]);
+                Repo::log($row->service_id, 'app_missing', false, $appName . ' is not installed; the server runs ' . ($osNow ?: 'a plain OS'), null, $row->instance_id);
+                Mailer::alertAdmin(
+                    'app-missing-' . $row->service_id,
+                    'Ordered app ' . $appName . ' is not installed (service #' . $row->service_id . ')',
+                    'Server ' . $row->instance_id . ' is running ' . ($osNow ?: 'a plain OS') . ' without ' . $appName
+                    . '. Reinstall it with the app from the client panel or the Evorxa console, or contact the client.'
+                );
+                $row->os_label = $osNow ?: $row->os_label;
+                $row->missing_app = $appName;
+            }
+            if ($app) {
+                $catalogApps = (new Catalog())->apps();
+                if (isset($catalogApps[$row->app_slug]['setup_note'])) {
+                    $app['setup_note'] = $catalogApps[$row->app_slug]['setup_note'];
+                }
+            }
+        }
+
+        self::writeCredentials($row->service_id, $inst);
+        Repo::update($row->service_id, ['state' => 'active', 'ready_at' => Repo::now(), 'error' => null]);
+        Provisioner::deleteSshKeyWith($api, $row->ssh_key_id);
+        if ($row->ssh_key_id) {
+            Repo::update($row->service_id, ['ssh_key_id' => null]);
+        }
+        if (!$row->ready_notified_at) {
+            Repo::log($row->service_id, 'provision', true, 'Server is ready', null, $row->instance_id);
+        }
+        Cache::delete('inst:' . $row->instance_id);
+        $vars = Mailer::readyVars($row->service_id, $inst, $app, $row->os_label);
+        $vars['app_missing'] = isset($row->missing_app) ? Util::clean($row->missing_app, 80) : '';
+        Mailer::sendReady($row->service_id, $vars);
+        return true;
+    }
+
+    /** Hostname, IPs, username and the (encrypted) root password onto the mapping row. */
+    public static function writeCredentials($serviceId, array $inst)
+    {
+        $update = [];
+        if (!empty($inst['hostname'])) {
+            $update['hostname'] = Util::clean($inst['hostname'], 190);
+        }
+        if (!empty($inst['main_ip'])) {
+            $update['ip'] = Util::clean((string) $inst['main_ip'], 64);
+        }
+        $others = [];
+        foreach ((array) (isset($inst['ip_addresses']) ? $inst['ip_addresses'] : []) as $ip) {
+            if (!empty($ip['address']) && $ip['address'] !== (isset($inst['main_ip']) ? $inst['main_ip'] : null)) {
+                $others[] = $ip['address'];
+            }
+        }
+        $update['extra_ips'] = implode("\n", $others);
+        if (!empty($inst['username'])) {
+            $update['username'] = Util::clean($inst['username'], 60);
+        }
+        if (!empty($inst['password']) && is_string($inst['password'])) {
+            $update['password'] = encrypt($inst['password']);
+        }
+        Repo::update($serviceId, $update);
+        $service = Repo::service($serviceId);
+        Provisioner::labelService($service, isset($update['hostname']) ? $update['hostname'] : '');
+    }
+
+    private static function timedOut($row)
+    {
+        $minutes = max(10, (int) Settings::get('provision_timeout'));
+        $started = strtotime((string) ($row->creating_at ?: $row->updated_at));
+        return $started && time() - $started > $minutes * 60;
+    }
+
+    private static function maybeAlertSlow($row, $timedOut)
+    {
+        if (!$timedOut || $row->alerted_at) {
+            return;
+        }
+        Repo::update($row->service_id, ['alerted_at' => Repo::now()]);
+        Repo::log($row->service_id, 'provision', false, 'Server is still building after the provisioning timeout', null, $row->instance_id);
+        Mailer::alertAdmin(
+            'slow-' . $row->service_id,
+            'Server for service #' . $row->service_id . ' is taking long to build',
+            'Server ' . $row->instance_id . ' is still being built. The module keeps checking and emails the client when it is ready.'
+        );
+    }
+
+    // ------------------------------------------------------------------ hourly sync + keeper
+
+    private static function syncAll($deadline)
+    {
+        $rows = DB::table(Schema::SERVICES)->whereIn('state', ['active', 'provisioning'])->whereNotNull('instance_id')->get();
+        $groups = [];
+        foreach ($rows as $row) {
+            $service = Repo::service($row->service_id);
+            $server = $service && $service->product ? $service->product->server : null;
+            $serverKey = $server && $server->extension === Client::MODULE ? (int) $server->id : 0;
+            $groups[$serverKey . ':' . (int) $row->project_id][] = [$row, $service];
+        }
+        foreach ($groups as $key => $items) {
+            if (time() >= $deadline) {
+                return;
+            }
+            list(, $projectId) = explode(':', $key);
+            try {
+                $api = self::clientFor($items[0][1]);
+                $list = $api->get('instances', ['project_id' => (int) $projectId]);
+                $me = (new Catalog($api))->me();
+            } catch (\Throwable $e) {
+                continue;
+            }
+            $autoRenew = !isset($me['user']['auto_renew']) || !empty($me['user']['auto_renew']);
+            $byId = [];
+            foreach ((array) $list as $inst) {
+                if (is_array($inst) && isset($inst['id'])) {
+                    $byId[(string) $inst['id']] = $inst;
+                }
+            }
+            foreach ($items as $item) {
+                list($row, $service) = $item;
+                $inst = isset($byId[$row->instance_id]) ? $byId[$row->instance_id] : null;
+                if (!$inst) {
+                    self::flagMissing($row, $service);
+                    continue;
+                }
+                $snapshot = Provisioner::snapshotOf($inst);
+                Repo::update($row->service_id, ['snapshot' => json_encode($snapshot), 'last_sync_at' => Repo::now()]);
+                if ($row->state !== 'active') {
+                    continue;
+                }
+                try {
+                    Keeper::run($api, $row, $service, $inst, $autoRenew);
+                } catch (\Throwable $e) {
+                    Repo::log($row->service_id, 'keeper', false, $e->getMessage(), null, $row->instance_id, 'cron');
+                }
+            }
+        }
+    }
+
+    private static function flagMissing($row, $service)
+    {
+        if (!$service || !in_array($service->status, ['active', 'suspended'], true)) {
+            return;
+        }
+        Repo::log($row->service_id, 'sync', false, 'Linked server not found in its Evorxa project (deleted upstream?)', null, $row->instance_id, 'cron');
+        Mailer::alertAdmin(
+            'missing-' . $row->service_id,
+            'Server for service #' . $row->service_id . ' is missing upstream',
+            'Service #' . $row->service_id . ' is ' . $service->status . ' in Paymenter but its server ' . $row->instance_id
+            . ' is not in Evorxa project #' . (int) $row->project_id . '. Check Admin > Evorxa > Servers.',
+            86400
+        );
+    }
+
+    // ------------------------------------------------------------------ stock + wallet
+
+    /** Mirror Evorxa stock into products that use stock control (stock not empty). */
+    public static function syncStock()
+    {
+        $serverIds = Server::where('extension', Client::MODULE)->pluck('id')->all();
+        if (!$serverIds) {
+            return 0;
+        }
+        $products = Product::with('settings')->whereIn('server_id', $serverIds)->whereNotNull('stock')->get();
+        if (!count($products)) {
+            return 0;
+        }
+        $catalog = new Catalog(Client::forDefaultServer());
+        $plans = $catalog->plans(true);
+        $changed = 0;
+        foreach ($products as $product) {
+            $pkg = (int) optional($product->settings->firstWhere('key', 'plan'))->value;
+            if (!isset($plans[$pkg]['stock'])) {
+                continue;
+            }
+            $stock = max(0, (int) $plans[$pkg]['stock']);
+            if ((int) $product->stock !== $stock) {
+                $product->stock = $stock;
+                $product->saveQuietly();
+                $changed++;
+            }
+        }
+        return $changed;
+    }
+
+    public static function checkBalance()
+    {
+        $api = Client::forDefaultServer();
+        $balance = $api->get('wallet/balance');
+        $cents = isset($balance['balance_cents']) ? (int) $balance['balance_cents'] : 0;
+        $threshold = (int) round(((float) Settings::get('low_balance')) * 100);
+        $me = (new Catalog($api))->me(true);
+        $renewal = isset($me['user']['next_renewal']) && is_array($me['user']['next_renewal']) ? $me['user']['next_renewal'] : null;
+        $upcoming = 0;
+        if ($renewal && !empty($renewal['at']) && Util::ts($renewal['at']) < time() + 7 * 86400) {
+            $upcoming = (int) (isset($renewal['amount_cents']) ? $renewal['amount_cents'] : 0);
+        }
+        if (($threshold > 0 && $cents < $threshold) || ($upcoming > 0 && $cents < $upcoming)) {
+            $msg = 'Evorxa wallet balance is ' . Util::formatCents($cents) . '.';
+            if ($upcoming > 0) {
+                $msg .= ' Renewals of ' . Util::formatCents($upcoming) . ' are due on ' . Util::date($renewal['at']) . '.';
+            }
+            $msg .= ' Servers are suspended upstream when a renewal cannot be paid, and new orders cannot be provisioned. Top up the wallet in the Evorxa dashboard.';
+            Mailer::alertAdmin('low-balance', 'Evorxa wallet balance is low', $msg, 86000);
+        }
+        return $cents;
+    }
+}

@@ -1,0 +1,82 @@
+/*
+ * Paymenter theme bridge for the Evorxa panel.
+ * Colours follow the Paymenter theme variables (light and dark mode, Admin > Theme colours),
+ * and the few Bootstrap-style controls the panel uses are defined here because Paymenter's theme is Tailwind.
+ * Override any --evx-* variable in your own theme CSS to restyle the panel.
+ */
+.evx {
+    --evx-accent: hsl(var(--color-primary, 229 100% 64%));
+    --evx-surface: hsl(var(--color-background-secondary, 0 0% 97%));
+    --evx-border: hsl(var(--color-neutral, 220 25% 85%));
+    --evx-soft: hsl(var(--color-neutral, 220 25% 85%) / .38);
+    --evx-ok: hsl(var(--color-success, 142 71% 45%));
+    --evx-warn: hsl(var(--color-warning, 25 95% 53%));
+    --evx-bad: hsl(var(--color-error, 0 75% 60%));
+    --evx-off: hsl(var(--color-muted, 0 0% 40%));
+    --evx-radius: .5rem;
+    --evx-radius-sm: .4rem;
+    --evx-shadow: none;
+    color: hsl(var(--color-base, 0 0% 0%));
+    margin: 0;
+    font-size: 14px;
+}
+.evx-host { padding: 0; }
+.evx .evx-card { padding: 20px; }
+.evx .evx-muted, .evx .evx-sub { color: hsl(var(--color-muted, 0 0% 40%)); opacity: 1; }
+.evx a { color: var(--evx-accent); }
+.evx .evx-os-img { background: #fff; }
+
+/* Buttons */
+.evx .btn, .evx-modal .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: .5rem .9rem; border-radius: .5rem; border: 1px solid hsl(var(--color-neutral, 220 25% 85%));
+    background: hsl(var(--color-background, 0 0% 100%)); color: hsl(var(--color-base, 0 0% 0%));
+    font-size: 14px; font-weight: 600; line-height: 1.25; cursor: pointer; text-decoration: none; white-space: nowrap;
+    transition: background-color .15s, border-color .15s, color .15s, opacity .15s;
+}
+.evx .btn:hover, .evx-modal .btn:hover { border-color: hsl(var(--color-primary, 229 100% 64%)); color: hsl(var(--color-primary, 229 100% 64%)); }
+.evx .btn:disabled, .evx .btn.disabled, .evx-modal .btn:disabled { opacity: .5; cursor: not-allowed; }
+.evx .btn-primary, .evx-modal .btn-primary {
+    background: hsl(var(--color-primary, 229 100% 64%)); border-color: hsl(var(--color-primary, 229 100% 64%)); color: #fff;
+}
+.evx .btn-primary:hover, .evx-modal .btn-primary:hover { color: #fff; filter: brightness(1.08); }
+.evx .btn-danger, .evx-modal .btn-danger {
+    background: hsl(var(--color-error, 0 75% 60%)); border-color: hsl(var(--color-error, 0 75% 60%)); color: #fff;
+}
+.evx .btn-danger:hover, .evx-modal .btn-danger:hover { color: #fff; filter: brightness(1.08); }
+.evx .btn-sm { padding: .35rem .7rem; font-size: 13px; }
+.evx .evx-btn-quiet { color: var(--evx-bad); }
+
+/* Inputs */
+.evx .form-control, .evx select, .evx input[type="text"], .evx input[type="search"] {
+    width: 100%; min-height: 38px; padding: .45rem .75rem; border-radius: .5rem;
+    border: 1px solid hsl(var(--color-neutral, 220 25% 85%)); background: hsl(var(--color-background, 0 0% 100%));
+    color: hsl(var(--color-base, 0 0% 0%)); font-size: 14px; line-height: 1.4;
+}
+.evx .form-control:focus, .evx select:focus, .evx input:focus {
+    outline: none; border-color: hsl(var(--color-primary, 229 100% 64%)); box-shadow: 0 0 0 3px hsl(var(--color-primary, 229 100% 64%) / .18);
+}
+.evx input[type="checkbox"] { width: auto; min-height: 0; }
+
+/* Confirmation dialog (appended to <body>, so it reads the theme variables directly) */
+.evx-modal {
+    background: hsl(var(--color-background-secondary, 0 0% 97%)); color: hsl(var(--color-base, 0 0% 0%));
+    border: 1px solid hsl(var(--color-neutral, 220 25% 85%));
+}
+.evx-modal p { color: hsl(var(--color-muted, 0 0% 40%)); opacity: 1; }
+
+/* Checkout picker (orderform.css) in Paymenter's theme colours */
+.evx-of {
+    --evx-of-accent: hsl(var(--color-primary, 229 100% 64%));
+    --evx-of-border: hsl(var(--color-neutral, 220 25% 85%));
+    margin-bottom: 4px;
+}
+.evx-of .evx-of-card, .evx-of .evx-of-pill { background: hsl(var(--color-background-secondary, 0 0% 97%)); color: hsl(var(--color-base, 0 0% 0%)); }
+.evx-of .evx-of-card.is-active { background: hsl(var(--color-primary, 229 100% 64%) / .08); }
+.evx-of .evx-of-pill.is-active { background: var(--evx-of-accent); color: #fff; }
+.evx-of .evx-of-switch { background: hsl(var(--color-neutral, 220 25% 85%) / .45); }
+.evx-of .evx-of-tab { color: hsl(var(--color-base, 0 0% 0%)); }
+.evx-of .evx-of-tab.is-active { background: hsl(var(--color-background, 0 0% 100%)); color: var(--evx-of-accent); }
+.evx-of .evx-of-sub, .evx-of .evx-of-hint, .evx-of .evx-of-label { color: hsl(var(--color-muted, 0 0% 40%)); opacity: 1; }
+.evx-of .evx-of-logo { background: #fff; }
+fieldset.evx-of-hidden { display: none !important; }
